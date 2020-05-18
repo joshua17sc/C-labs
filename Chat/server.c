@@ -1,76 +1,118 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdlib.h> //strlen
+#include <string.h> //strlen
+#include <unistd.h> //write
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
+#include <netinet/in.h> //inet_addr
+#include <pthread.h> //for threading, link with lpthread
 
+void *connection_handler(void *);
+
+//This will print our error messages and end our program
 void error(const char *msg)
 {
 	perror(msg);
 	exit(1);
 }
 
+//Creates a socket, binds, listens, accepts, reads and writes, then closes
 int main(int argc, char *argv[])
 {
-	if(argc < 2)
-	{
-		fprintf(stderr ,"Port No not provided, Program terminated\n");
-		exit(1);
-	}
-	int sockfd , newsockfd , portno, n;
-	char buffer[255];
 	
-	struct sockaddr_in serv_addr, cli_addr;
+	//Initiates our variables
+	int sockfd , newsockfd , n, *new_sock;
+	char *message;
+	struct sockaddr_in server, client;
 	socklen_t clilen;
 	
+	//Creates socket
 	sockfd = socket(AF_INET , SOCK_STREAM , 0);
 	if(sockfd <0)
-		error("Error opening Socket.\n");
-	
-	
-	bzero((char *) &serv_addr , sizeof(serv_addr));
-	portno = atoi(argv[1]);
-	
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = INADDR_ANY;
-	serv_addr.sin_port = htons(portno);
-	
-	if(bind(sockfd , (struct sockaddr *) &serv_addr , sizeof(serv_addr)) <0)
-		error("Binding Failed.\n");
-		
-	listen(sockfd , 5);
-	clilen = sizeof(cli_addr);
-	
-	newsockfd = accept(sockfd , (struct sockaddr *) &cli_addr , &clilen);
-	
-	if(newsockfd < 0)
-		error("Error on Accept");
-		
-	while(1)
 	{
-		bzero(buffer , 255);
-		n = read(newsockfd , buffer , 255);
-		if(n <0)
-			error("Error on reading.");
+		error("Error opening Socket.");
+	}
 		
-		printf("Client : %s\n" , buffer);
-		bzero(buffer , 255);
-		fgets(buffer , 255 , stdin);
+	//Prepare the sockaddr_in structure
+	server.sin_family = AF_INET;
+	server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_port = htons(8888);
+	
+	//Bind
+	if(bind(sockfd , (struct sockaddr *) &server , sizeof(server)) <0)
+	{
+		error("Binding Failed.");
+	}
+	puts("Bind complete");
+	
+	//Listen	
+	listen(sockfd , 5);
+	
+	//Accept incoming connection
+	puts("Waiting for incoming connections...");
+	clilen = sizeof(client);
+	while( (newsockfd = accept(sockfd , (struct sockaddr *)&client , (socklen_t*)&clilen)) )
+	{
+		puts("Connection accepted");
+	
+		//Welcome client
+		message = "Hello Client , I have received your connection. And now I will assign a handler for you\n";
+		write(newsockfd , message , strlen(message));
+	
+		pthread_t sniffer_thread;
+		new_sock = malloc(1);
+		*new_sock = newsockfd;
 		
-		n = write(newsockfd , buffer , strlen(buffer));
-		if(n < 0)
-			error("Error on Writing.");
-		
-		
-		int i = strncmp("Bye" , buffer , 3);
-		if(i == 0)
-		break;	
-		
+		if( pthread_create( &sniffer_thread , NULL , connection_handler , (void*) new_sock) <0)
+		{
+			error("Could not create thread.");
+		}
+			
+		//Now join the thread , so that we don't terminate before the thread
+		pthread_join(sniffer_thread , NULL);
+		puts("Handler assigned");
 	}
 	
-	close(newsockfd);
-	close(sockfd);
+	if(newsockfd < 0)
+	{
+		error("Error on Accept");
+	}
+	return 0;
+}
+
+// This will handle connections for each client
+void *connection_handler(void *sockfd)
+{
+	//Get the socket descriptor
+	int sock = *(int*)sockfd;
+	int read_size;
+	char *message, client_message[255];
+	
+	//Send some messages to the client
+	message = "Greetings! I am your connection handler.\n";
+	write(sock , message , strlen(message));
+	
+	message = "Now type something and I shall repeat what you type.\n";
+	write(sock , message , strlen(message));
+	
+	//Receive a message from client
+	while( (read_size = recv(sock , client_message , 255 , 0)) >0 )
+	{
+		//Send the message back to the client
+		write(sock , client_message , strlen(client_message));
+	}
+	if(read_size == 0)
+	{
+		puts("Client disconnected");
+		fflush(stdout);
+	}
+	else if(read_size == -1)
+	{
+		error("Failed to receive");
+	}
+	
+	//Free the socket pointer
+	free(sockfd);
+	
 	return 0;
 }
